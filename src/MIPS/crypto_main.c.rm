@@ -1,0 +1,177 @@
+#include "mipslab.h"
+#include "machine_defs.h"
+#include "dh.h"
+#include "chacha20.h"
+
+const char* plain_str = "A super secret and null terminated string.";
+const u32 plain_str_len = 43; // includes null term.
+
+// Grabs the least sig 4 bits of passed byte and returns hex code.
+char nibble_to_hex(u8 nibble)
+{
+  nibble &= 0x0F;
+  if (nibble < 10) {
+    return '0' + nibble;
+  }
+
+  return 'A' + (nibble-10);
+}
+
+// Prints up to the first 8 bytes of the passed array bytes to the first line.
+void print_buffer_start(u8 line, u8 bytes[], u8 len)
+{
+  len = (len == 0) || (len > 8) ? 8 : len;
+  char str[17]; // 8 bytes = 16 hex digits + null term.
+  str[16] = 0;
+
+  u8 i;
+  char c;
+  for (i = 0; i < len; ++i) {
+    c = nibble_to_hex(bytes[i] >> 4);
+    str[i*2] = c;
+    c = nibble_to_hex(bytes[i]);
+    str[i*2 + 1] = c;
+  }
+
+  display_string(line, str);
+}
+
+dh_main()
+{
+  int progress = 0;
+  display_debug(&progress);
+  display_update();
+
+  // A generates random private key.
+  DhPrivKey priv_a;
+  dh_random_priv_key(&priv_a);
+  progress = 1;
+  display_debug(&progress);
+  display_update();
+
+  // So does b.
+  DhPrivKey priv_b;
+  dh_random_priv_key(&priv_b);
+  progress = 2;
+  display_debug(&progress);
+  display_update();
+
+  // A calculates their public key.
+  DhPubKey pub_a;
+  dh_calc_pub_key(&priv_a, &pub_a);
+  progress = 3;
+  display_debug(&progress);
+  display_update();
+
+  // So does B.
+  DhPubKey pub_b;
+  dh_calc_pub_key(&priv_b, &pub_b);
+  progress = 4;
+  display_debug(&progress);
+  display_update();
+
+  // A and B exchange public keys (over network).
+  // A: dh_pub_key_to_bytes(pub_a, pub_a_bytes);
+  // B: dh_pub_key_to_bytes(pub_b, pub_b_bytes);
+  // ...
+  // A: dh_bytes_to_pub_key(pub_b_bytes, pub_b);
+  // B: dh_bytes_to_pub_key(pub_a_bytes, pub_a);
+
+  // A calculates shared secret using priv_a and pub_b.
+  u8 ss_a[R_LEN*LIMB_BYTE_COUNT];
+  dh_calc_shared_secret(&priv_a, &pub_b, ss_a);
+  progress = 5;
+  display_debug(&progress);
+  display_update();
+
+  // B calculates shared secret using priv_b and pub_a.
+  u8 ss_b[R_LEN*LIMB_BYTE_COUNT];
+  dh_calc_shared_secret(&priv_b, &pub_a, ss_b);
+  progress = 6;
+  display_debug(&progress);
+  display_update();
+
+  // Both A and B got the same shared secret:
+  print_buffer_start(0, ss_a, 0);
+  print_buffer_start(1, ss_b, 0);
+  display_update();
+}
+
+
+#if 1
+void chacha_main()
+{
+  unsigned int progress = 0;
+  display_debug(&progress);
+  display_update();
+
+  u8 msg[] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+
+  ChaChaCtx ctx;
+
+  // This key and nonce are taken from example / test 5 (see chacha20.c)
+  const u8 key[] = {
+    0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,
+    0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f,
+    0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,
+    0x18,0x19,0x1a,0x1b,0x1c,0x1d,0x1e,0x1f,
+  };
+  const u8 nonce[] = {
+    0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07
+  };
+
+  chacha_init(&ctx, key, nonce);
+  progress = 1;
+  display_debug(&progress);
+  display_update();
+
+  // You can generate any multiple of 64 bytes of the keystream.
+  // Remember: chacha_keystream() does _not_ reset ctr.
+  // Comparing the printed keystream to the desired result from
+  // https://tools.ietf.org/html/draft-agl-tls-chacha20poly1305-04#section-7
+  // you'll see that it's correct.
+  u8 keystream[512];
+  chacha20_keystream(&ctx, sizeof(keystream), keystream);
+  chacha_set_ctr(&ctx, 0, 0);
+  //print_bytes(keystream, sizeof(keystream));
+  print_buffer_start(0, keystream, 0);
+  display_update();
+  while (1);
+
+
+  u8* plain = plain_str;
+  //const u32 len = sizeof(plain); // includes null term.
+  //const u32 len = plain_str_len;
+  const u32 len = 8;
+  u8 cipher[len]; // Same size, ie the null term is also encrypted.
+  u8 decipher[len];
+
+  // If you only use chacha20_enc you do not need to reset the ctr.
+  // So the simple use case is: init ctx with chacha_init() and then
+  // call chacha20_enc any number of times to encrypt or decrypt data.
+
+  // Encrypt plain text and store in cipher.
+  chacha20_enc(&ctx, msg, len, cipher);
+  progress = 2;
+  display_debug(&progress);
+  display_update();
+
+  // Ecrypt and decryfpt is the same op in chacha.
+  // Decrypt cipher text and store in decpher.
+  chacha20_enc(&ctx, cipher, len, decipher);
+  progress = 3;
+  display_debug(&progress);
+  display_update();
+
+  display_string(0, plain);
+  print_buffer_start(1, cipher, 0);
+  display_string(2, decipher);
+  display_update();
+}
+#endif // Comment out chacha_main
+
+void crypto_main()
+{
+  chacha_main();
+  //dh_main();
+}
